@@ -1,0 +1,469 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.44.1.10279",
+      "templateHash": "5176298071009067115"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Deployment location"
+      }
+    },
+    "ownerTag": {
+      "type": "string",
+      "defaultValue": "adam.johns@neudesic.com",
+      "metadata": {
+        "description": "Owner tag value required by policy"
+      }
+    },
+    "acrName": {
+      "type": "string",
+      "defaultValue": "acrcocktailagentdevwus01",
+      "metadata": {
+        "description": "ACR name (global, alphanumeric only)"
+      }
+    },
+    "containerAppsEnvName": {
+      "type": "string",
+      "defaultValue": "cae-cocktailagent-dev-wus-01",
+      "metadata": {
+        "description": "Container Apps environment name"
+      }
+    },
+    "mcpContainerAppName": {
+      "type": "string",
+      "defaultValue": "ca-cocktailagent-mcp-dev-wus-01",
+      "metadata": {
+        "description": "MCP API container app name"
+      }
+    },
+    "scraperJobName": {
+      "type": "string",
+      "defaultValue": "caj-cocktailagent-scraper-dev-wus-01",
+      "metadata": {
+        "description": "Scraper job container app name"
+      }
+    },
+    "postgresServerName": {
+      "type": "string",
+      "defaultValue": "psql-cocktailagent-dev-wus-01",
+      "metadata": {
+        "description": "PostgreSQL flexible server name"
+      }
+    },
+    "postgresDbName": {
+      "type": "string",
+      "defaultValue": "cocktails",
+      "metadata": {
+        "description": "PostgreSQL database name"
+      }
+    },
+    "postgresAdminUsername": {
+      "type": "string",
+      "metadata": {
+        "description": "PostgreSQL admin username"
+      }
+    },
+    "postgresAdminPassword": {
+      "type": "securestring",
+      "metadata": {
+        "description": "PostgreSQL admin password"
+      }
+    },
+    "keyVaultName": {
+      "type": "string",
+      "defaultValue": "kvcocktaildevwus01",
+      "metadata": {
+        "description": "Key Vault name (global unique)"
+      }
+    },
+    "logAnalyticsName": {
+      "type": "string",
+      "defaultValue": "log-cocktailagent-dev-wus-01",
+      "metadata": {
+        "description": "Log Analytics workspace name"
+      }
+    },
+    "appInsightsName": {
+      "type": "string",
+      "defaultValue": "ai-cocktailagent-dev-wus-01",
+      "metadata": {
+        "description": "Application Insights name"
+      }
+    },
+    "mcpApiImage": {
+      "type": "string",
+      "defaultValue": "acrcocktailagentdevwus01.azurecr.io/cocktail-mcp-api:latest",
+      "metadata": {
+        "description": "MCP API image in ACR"
+      }
+    },
+    "scraperImage": {
+      "type": "string",
+      "defaultValue": "acrcocktailagentdevwus01.azurecr.io/cocktail-scraper:latest",
+      "metadata": {
+        "description": "Scraper job image in ACR"
+      }
+    },
+    "mcpApiKey": {
+      "type": "securestring",
+      "metadata": {
+        "description": "MCP API key used for private access"
+      }
+    }
+  },
+  "variables": {
+    "tags": {
+      "Owner": "[parameters('ownerTag')]"
+    },
+    "dbConnectionString": "[format('postgresql://{0}:{1}@{2}.postgres.database.azure.com:5432/{3}?sslmode=require', parameters('postgresAdminUsername'), parameters('postgresAdminPassword'), parameters('postgresServerName'), parameters('postgresDbName'))]",
+    "acrPullRoleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')]",
+    "keyVaultUri": "[format('https://{0}.{1}', parameters('keyVaultName'), environment().suffixes.keyvaultDns)]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.OperationalInsights/workspaces",
+      "apiVersion": "2022-10-01",
+      "name": "[parameters('logAnalyticsName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('tags')]",
+      "properties": {
+        "sku": {
+          "name": "PerGB2018"
+        },
+        "retentionInDays": 30
+      }
+    },
+    {
+      "type": "Microsoft.Insights/components",
+      "apiVersion": "2020-02-02",
+      "name": "[parameters('appInsightsName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('tags')]",
+      "kind": "web",
+      "properties": {
+        "Application_Type": "web",
+        "WorkspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('logAnalyticsName'))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('logAnalyticsName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults",
+      "apiVersion": "2023-02-01",
+      "name": "[parameters('keyVaultName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('tags')]",
+      "properties": {
+        "tenantId": "[subscription().tenantId]",
+        "sku": {
+          "family": "A",
+          "name": "standard"
+        },
+        "enableRbacAuthorization": true,
+        "publicNetworkAccess": "Enabled",
+        "networkAcls": {
+          "bypass": "AzureServices",
+          "defaultAction": "Allow"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2023-02-01",
+      "name": "[format('{0}/{1}', parameters('keyVaultName'), 'mcp-api-key')]",
+      "properties": {
+        "value": "[parameters('mcpApiKey')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2023-02-01",
+      "name": "[format('{0}/{1}', parameters('keyVaultName'), 'db-connection-string')]",
+      "properties": {
+        "value": "[variables('dbConnectionString')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.ContainerRegistry/registries",
+      "apiVersion": "2023-07-01",
+      "name": "[parameters('acrName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('tags')]",
+      "sku": {
+        "name": "Basic"
+      },
+      "properties": {
+        "adminUserEnabled": false,
+        "publicNetworkAccess": "Enabled"
+      }
+    },
+    {
+      "type": "Microsoft.DBforPostgreSQL/flexibleServers",
+      "apiVersion": "2023-06-01-preview",
+      "name": "[parameters('postgresServerName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('tags')]",
+      "sku": {
+        "name": "Standard_B1ms",
+        "tier": "Burstable"
+      },
+      "properties": {
+        "version": "16",
+        "administratorLogin": "[parameters('postgresAdminUsername')]",
+        "administratorLoginPassword": "[parameters('postgresAdminPassword')]",
+        "storage": {
+          "storageSizeGB": 32
+        },
+        "backup": {
+          "backupRetentionDays": 7,
+          "geoRedundantBackup": "Disabled"
+        },
+        "highAvailability": {
+          "mode": "Disabled"
+        },
+        "network": {
+          "publicNetworkAccess": "Enabled"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.DBforPostgreSQL/flexibleServers/databases",
+      "apiVersion": "2023-06-01-preview",
+      "name": "[format('{0}/{1}', parameters('postgresServerName'), parameters('postgresDbName'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', parameters('postgresServerName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.DBforPostgreSQL/flexibleServers/firewallRules",
+      "apiVersion": "2023-06-01-preview",
+      "name": "[format('{0}/{1}', parameters('postgresServerName'), 'AllowAzureServices')]",
+      "properties": {
+        "startIpAddress": "0.0.0.0",
+        "endIpAddress": "0.0.0.0"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', parameters('postgresServerName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.App/managedEnvironments",
+      "apiVersion": "2023-05-01",
+      "name": "[parameters('containerAppsEnvName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('tags')]",
+      "properties": {
+        "appLogsConfiguration": {
+          "destination": "log-analytics",
+          "logAnalyticsConfiguration": {
+            "customerId": "[reference(resourceId('Microsoft.OperationalInsights/workspaces', parameters('logAnalyticsName')), '2022-10-01').customerId]",
+            "sharedKey": "[listKeys(resourceId('Microsoft.OperationalInsights/workspaces', parameters('logAnalyticsName')), '2022-10-01').primarySharedKey]"
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('logAnalyticsName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2023-05-01",
+      "name": "[parameters('mcpContainerAppName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('tags')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', parameters('containerAppsEnvName'))]",
+        "configuration": {
+          "ingress": {
+            "external": true,
+            "targetPort": 8000
+          },
+          "registries": [
+            {
+              "server": "[format('{0}.azurecr.io', parameters('acrName'))]",
+              "identity": "system"
+            }
+          ],
+          "secrets": [
+            {
+              "name": "mcp-api-key",
+              "value": "[parameters('mcpApiKey')]"
+            },
+            {
+              "name": "db-connection-string",
+              "value": "[variables('dbConnectionString')]"
+            }
+          ]
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "mcp-api",
+              "image": "[parameters('mcpApiImage')]",
+              "resources": {
+                "cpu": "[json('0.25')]",
+                "memory": "0.5Gi"
+              },
+              "env": [
+                {
+                  "name": "MCP_API_KEY",
+                  "secretRef": "mcp-api-key"
+                },
+                {
+                  "name": "DATABASE_URL",
+                  "secretRef": "db-connection-string"
+                },
+                {
+                  "name": "APPLICATIONINSIGHTS_CONNECTION_STRING",
+                  "value": "[reference(resourceId('Microsoft.Insights/components', parameters('appInsightsName')), '2020-02-02').ConnectionString]"
+                },
+                {
+                  "name": "KEY_VAULT_URI",
+                  "value": "[variables('keyVaultUri')]"
+                }
+              ]
+            }
+          ],
+          "scale": {
+            "minReplicas": 0,
+            "maxReplicas": 1
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/components', parameters('appInsightsName'))]",
+        "[resourceId('Microsoft.App/managedEnvironments', parameters('containerAppsEnvName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.App/jobs",
+      "apiVersion": "2023-05-01",
+      "name": "[parameters('scraperJobName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('tags')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "environmentId": "[resourceId('Microsoft.App/managedEnvironments', parameters('containerAppsEnvName'))]",
+        "configuration": {
+          "triggerType": "Manual",
+          "replicaTimeout": 1800,
+          "replicaRetryLimit": 1,
+          "manualTriggerConfig": {
+            "parallelism": 1,
+            "replicaCompletionCount": 1
+          },
+          "registries": [
+            {
+              "server": "[format('{0}.azurecr.io', parameters('acrName'))]",
+              "identity": "system"
+            }
+          ],
+          "secrets": [
+            {
+              "name": "db-connection-string",
+              "value": "[variables('dbConnectionString')]"
+            }
+          ]
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "scraper",
+              "image": "[parameters('scraperImage')]",
+              "resources": {
+                "cpu": "[json('0.5')]",
+                "memory": "1.0Gi"
+              },
+              "env": [
+                {
+                  "name": "DATABASE_URL",
+                  "secretRef": "db-connection-string"
+                },
+                {
+                  "name": "DRINK_NAME",
+                  "value": "daiquiri"
+                },
+                {
+                  "name": "RESULT_SELECTOR",
+                  "value": "1"
+                },
+                {
+                  "name": "APPLICATIONINSIGHTS_CONNECTION_STRING",
+                  "value": "[reference(resourceId('Microsoft.Insights/components', parameters('appInsightsName')), '2020-02-02').ConnectionString]"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/components', parameters('appInsightsName'))]",
+        "[resourceId('Microsoft.App/managedEnvironments', parameters('containerAppsEnvName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName'))]",
+      "name": "[guid(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), parameters('mcpContainerAppName'), 'AcrPull-mcp')]",
+      "properties": {
+        "roleDefinitionId": "[variables('acrPullRoleDefinitionId')]",
+        "principalId": "[reference(resourceId('Microsoft.App/containerApps', parameters('mcpContainerAppName')), '2023-05-01', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName'))]",
+        "[resourceId('Microsoft.App/containerApps', parameters('mcpContainerAppName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName'))]",
+      "name": "[guid(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), parameters('scraperJobName'), 'AcrPull-scraper')]",
+      "properties": {
+        "roleDefinitionId": "[variables('acrPullRoleDefinitionId')]",
+        "principalId": "[reference(resourceId('Microsoft.App/jobs', parameters('scraperJobName')), '2023-05-01', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName'))]",
+        "[resourceId('Microsoft.App/jobs', parameters('scraperJobName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "mcpApiUrl": {
+      "type": "string",
+      "value": "[format('https://{0}', reference(resourceId('Microsoft.App/containerApps', parameters('mcpContainerAppName')), '2023-05-01').configuration.ingress.fqdn)]"
+    },
+    "keyVaultUri": {
+      "type": "string",
+      "value": "[variables('keyVaultUri')]"
+    },
+    "postgresHost": {
+      "type": "string",
+      "value": "[format('{0}.postgres.database.azure.com', parameters('postgresServerName'))]"
+    }
+  }
+}

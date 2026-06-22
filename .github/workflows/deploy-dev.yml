@@ -1,0 +1,112 @@
+name: Deploy Dev
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RESOURCE_GROUP: rg-cocktailagent-dev-wus-01
+  LOCATION: westus
+  ACR_NAME: acrcocktailagentdevwus01
+  MCP_IMAGE: cocktail-mcp-api
+  SCRAPER_IMAGE: cocktail-scraper
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Ensure resource group
+        run: |
+          az group create \
+            --name "$RESOURCE_GROUP" \
+            --location "$LOCATION" \
+            --tags Owner=adam.johns@neudesic.com
+
+      - name: ACR login
+        run: az acr login --name "$ACR_NAME"
+
+      - name: Build and push API image
+        run: |
+          docker build -f Dockerfile.api -t "$ACR_NAME.azurecr.io/$MCP_IMAGE:${{ github.sha }}" .
+          docker push "$ACR_NAME.azurecr.io/$MCP_IMAGE:${{ github.sha }}"
+
+      - name: Build and push scraper image
+        run: |
+          docker build -f Dockerfile.scraper -t "$ACR_NAME.azurecr.io/$SCRAPER_IMAGE:${{ github.sha }}" .
+          docker push "$ACR_NAME.azurecr.io/$SCRAPER_IMAGE:${{ github.sha }}"
+
+      - name: Resolve MCP API key
+        id: resolve_mcp_key
+        env:
+          MCP_API_KEY_SECRET: ${{ secrets.MCP_API_KEY }}
+        run: |
+          if [ -n "$MCP_API_KEY_SECRET" ]; then
+            echo "Using MCP_API_KEY from GitHub secret."
+            echo "mcp_api_key=$MCP_API_KEY_SECRET" >> "$GITHUB_OUTPUT"
+          else
+            GENERATED_KEY="$(openssl rand -hex 32)"
+            echo "MCP_API_KEY secret not set. Generated a new key for this deployment."
+            echo "mcp_api_key=$GENERATED_KEY" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy infrastructure
+        env:
+          POSTGRES_ADMIN_USERNAME: ${{ secrets.POSTGRES_ADMIN_USERNAME }}
+          POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+          MCP_API_KEY: ${{ steps.resolve_mcp_key.outputs.mcp_api_key }}
+        run: |
+          az deployment group create \
+            --resource-group "$RESOURCE_GROUP" \
+            --template-file infra/main.bicep \
+            --parameters infra/parameters/dev.bicepparam \
+            --parameters mcpApiImage="$ACR_NAME.azurecr.io/$MCP_IMAGE:${{ github.sha }}" \
+            --parameters scraperImage="$ACR_NAME.azurecr.io/$SCRAPER_IMAGE:${{ github.sha }}" \
+            --parameters postgresAdminUsername="${{ secrets.POSTGRES_ADMIN_USERNAME }}" \
+            --parameters postgresAdminPassword="${{ secrets.POSTGRES_ADMIN_PASSWORD }}" \
+            --parameters mcpApiKey="${{ steps.resolve_mcp_key.outputs.mcp_api_key }}"
+
+      - name: Set up Python for migrations
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install migration dependencies
+        run: |
+          pip install -q psycopg[binary]
+
+      - name: Wait for infrastructure to stabilize
+        run: sleep 30
+
+      - name: Run database migrations
+        run: |
+          # Retrieve connection string from Key Vault (created by Bicep deployment)
+          export DATABASE_URL=$(az keyvault secret show \
+            --vault-name kvcocktaildevwus01 \
+            --name db-connection-string \
+            --query value -o tsv 2>/dev/null || echo "")
+          
+          if [ -z "$DATABASE_URL" ]; then
+            echo "⚠️ Connection string not found in Key Vault, skipping migrations"
+            exit 0
+          fi
+          
+          python -m scraper.cli migrate
+
+      - name: Print app endpoint
+        run: |
+          az containerapp show \
+            --name ca-cocktailagent-mcp-dev-wus-01 \
+            --resource-group "$RESOURCE_GROUP" \
+            --query properties.configuration.ingress.fqdn -o tsv

@@ -1,0 +1,16 @@
+FROM mcr.microsoft.com/playwright/python:v1.51.0-jammy
+
+WORKDIR /app
+
+COPY requirements.txt ./
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir -r requirements.txt
+
+COPY main.py ./
+COPY scraper ./scraper
+COPY scripts/run_scraper_job.sh ./scripts/run_scraper_job.sh
+RUN chmod +x ./scripts/run_scraper_job.sh
+
+CMD ["/app/scripts/run_scraper_job.sh"]
