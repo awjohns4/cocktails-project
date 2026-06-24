@@ -18,6 +18,9 @@ param mcpContainerAppName string = 'ca-cocktailagent-mcp-dev-wus-01'
 @description('Scraper job container app name')
 param scraperJobName string = 'caj-cocktail-scraper-dev-wus-01'
 
+@description('Indexer job container app name')
+param indexerJobName string = 'caj-cocktail-indexer-dev-wus-01'
+
 @description('PostgreSQL flexible server name')
 param postgresServerName string = 'psql-cocktailagent-dev-wus-01'
 
@@ -46,9 +49,45 @@ param mcpApiImage string = 'acrcocktailagentdevwus01.azurecr.io/cocktail-mcp-api
 @description('Scraper job image in ACR')
 param scraperImage string = 'acrcocktailagentdevwus01.azurecr.io/cocktail-scraper:latest'
 
+@description('Indexer job image in ACR')
+param indexerImage string = 'acrcocktailagentdevwus01.azurecr.io/cocktail-indexer:latest'
+
 @secure()
 @description('MCP API key used for private access')
 param mcpApiKey string
+
+@description('Azure AI Search service name')
+param searchServiceName string = 'srch-cocktailagent-dev-wcu-01'
+
+@description('Azure AI Search SKU')
+param searchSku string = 'serverless'
+
+@description('Azure AI Search location (defaults to West Central US for serverless preview)')
+param searchLocation string = 'westcentralus'
+
+@description('Azure AI Search public network access')
+param searchPublicNetworkAccess string = 'Enabled'
+
+@description('Azure AI Search replica count (ignored for serverless)')
+param searchReplicaCount int = 1
+
+@description('Azure AI Search partition count (ignored for serverless)')
+param searchPartitionCount int = 1
+
+@description('Azure OpenAI resource name (primary, West US)')
+param openaiPrimaryName string = 'oai-cocktailagent-dev-wus-01'
+
+@description('Azure OpenAI resource name (secondary, East US)')
+param openaiSecondaryName string = 'oai-cocktailagent-dev-eus-01'
+
+@description('Azure OpenAI embedding deployment name')
+param embeddingDeploymentName string = 'text-embedding-3-small'
+
+@description('Azure OpenAI embedding model version')
+param embeddingModelVersion string = '1'
+
+@description('Azure OpenAI SKU')
+param openaiSku string = 'S0'
 
 var tags = {
   Owner: ownerTag
@@ -56,7 +95,10 @@ var tags = {
 
 var dbConnectionString = 'postgresql://${postgresAdminUsername}:${postgresAdminPassword}@${postgresServerName}.postgres.database.azure.com:5432/${postgresDbName}?sslmode=require'
 var acrPullRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
-var keyVaultUri = 'https://${keyVaultName}.${environment().suffixes.keyvaultDns}'
+var keyVaultDnsSuffix = startsWith(environment().suffixes.keyvaultDns, '.')
+  ? substring(environment().suffixes.keyvaultDns, 1)
+  : environment().suffixes.keyvaultDns
+var keyVaultUri = 'https://${keyVaultName}.${keyVaultDnsSuffix}'
 var userAssignedMiName = 'mi-cocktail-apps-dev-wus-01'
 
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {
@@ -323,10 +365,224 @@ resource scraperJob 'Microsoft.App/jobs@2023-05-01' = {
               name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
               value: appInsights.properties.ConnectionString
             }
+            {
+              name: 'KEY_VAULT_URI'
+              value: keyVaultUri
+            }
           ]
         }
       ]
     }
+  }
+}
+
+resource indexerJob 'Microsoft.App/jobs@2023-05-01' = {
+  name: indexerJobName
+  location: location
+  tags: tags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${userAssignedMi.id}': {}
+    }
+  }
+  properties: {
+    environmentId: containerAppsEnv.id
+    configuration: {
+      triggerType: 'Manual'
+      replicaTimeout: 3600
+      replicaRetryLimit: 1
+      manualTriggerConfig: {
+        parallelism: 1
+        replicaCompletionCount: 1
+      }
+      registries: [
+        {
+          server: '${acrName}.azurecr.io'
+          identity: userAssignedMi.id
+        }
+      ]
+      secrets: [
+        {
+          name: 'db-connection-string'
+          value: dbConnectionString
+        }
+        {
+          name: 'search-admin-key'
+          value: listAdminKeys(searchService.id, '2025-05-01').primaryKey
+        }
+        {
+          name: 'openai-primary-endpoint'
+          value: openaiPrimary.properties.endpoint
+        }
+        {
+          name: 'openai-primary-key'
+          value: listKeys(openaiPrimary.id, '2023-10-01-preview').key1
+        }
+        {
+          name: 'openai-secondary-endpoint'
+          value: openaiSecondary.properties.endpoint
+        }
+        {
+          name: 'openai-secondary-key'
+          value: listKeys(openaiSecondary.id, '2023-10-01-preview').key1
+        }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'indexer'
+          image: indexerImage
+          resources: {
+            cpu: json('1.0')
+            memory: '2.0Gi'
+          }
+          env: [
+            {
+              name: 'DATABASE_URL'
+              secretRef: 'db-connection-string'
+            }
+            {
+              name: 'SEARCH_SERVICE_NAME'
+              value: searchServiceName
+            }
+            {
+              name: 'SEARCH_ADMIN_KEY'
+              secretRef: 'search-admin-key'
+            }
+            {
+              name: 'SEARCH_INDEX_NAME'
+              value: 'cocktails-index'
+            }
+            {
+              name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+              value: appInsights.properties.ConnectionString
+            }
+            {
+              name: 'KEY_VAULT_URI'
+              value: keyVaultUri
+            }
+            {
+              name: 'OPENAI_API_ENDPOINT'
+              secretRef: 'openai-primary-endpoint'
+            }
+            {
+              name: 'OPENAI_API_KEY'
+              secretRef: 'openai-primary-key'
+            }
+            {
+              name: 'OPENAI_API_ENDPOINT_SECONDARY'
+              secretRef: 'openai-secondary-endpoint'
+            }
+            {
+              name: 'OPENAI_API_KEY_SECONDARY'
+              secretRef: 'openai-secondary-key'
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
+
+resource searchService 'Microsoft.Search/searchServices@2025-05-01' existing = {
+  name: searchServiceName
+}
+
+resource openaiPrimary 'Microsoft.CognitiveServices/accounts@2023-10-01-preview' = {
+  name: openaiPrimaryName
+  location: 'westus'
+  tags: tags
+  kind: 'OpenAI'
+  sku: {
+    name: openaiSku
+  }
+  properties: {
+    publicNetworkAccess: 'Enabled'
+    apiProperties: {
+      statisticsEnabled: false
+    }
+  }
+}
+
+resource embeddingDeploymentPrimary 'Microsoft.CognitiveServices/accounts/deployments@2023-10-01-preview' = {
+  parent: openaiPrimary
+  name: embeddingDeploymentName
+  sku: {
+    name: 'Standard'
+    capacity: 1
+  }
+  properties: {
+    model: {
+      format: 'OpenAI'
+      name: 'text-embedding-3-small'
+      version: embeddingModelVersion
+    }
+  }
+}
+
+resource openaiSecondary 'Microsoft.CognitiveServices/accounts@2023-10-01-preview' = {
+  name: openaiSecondaryName
+  location: 'eastus'
+  tags: tags
+  kind: 'OpenAI'
+  sku: {
+    name: openaiSku
+  }
+  properties: {
+    publicNetworkAccess: 'Enabled'
+    apiProperties: {
+      statisticsEnabled: false
+    }
+  }
+}
+
+resource embeddingDeploymentSecondary 'Microsoft.CognitiveServices/accounts/deployments@2023-10-01-preview' = {
+  parent: openaiSecondary
+  name: embeddingDeploymentName
+  sku: {
+    name: 'Standard'
+    capacity: 1
+  }
+  properties: {
+    model: {
+      format: 'OpenAI'
+      name: 'text-embedding-3-small'
+      version: embeddingModelVersion
+    }
+  }
+}
+
+resource kvSecretOpenaiPrimaryEndpoint 'Microsoft.KeyVault/vaults/secrets@2023-02-01' = {
+  parent: keyVault
+  name: 'openai-primary-endpoint'
+  properties: {
+    value: openaiPrimary.properties.endpoint
+  }
+}
+
+resource kvSecretOpenaiPrimaryKey 'Microsoft.KeyVault/vaults/secrets@2023-02-01' = {
+  parent: keyVault
+  name: 'openai-primary-key'
+  properties: {
+    value: listKeys(openaiPrimary.id, '2023-10-01-preview').key1
+  }
+}
+
+resource kvSecretOpenaiSecondaryEndpoint 'Microsoft.KeyVault/vaults/secrets@2023-02-01' = {
+  parent: keyVault
+  name: 'openai-secondary-endpoint'
+  properties: {
+    value: openaiSecondary.properties.endpoint
+  }
+}
+
+resource kvSecretOpenaiSecondaryKey 'Microsoft.KeyVault/vaults/secrets@2023-02-01' = {
+  parent: keyVault
+  name: 'openai-secondary-key'
+  properties: {
+    value: listKeys(openaiSecondary.id, '2023-10-01-preview').key1
   }
 }
 
@@ -343,3 +599,8 @@ resource acrPullRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-
 output mcpApiUrl string = 'https://${mcpContainerApp.properties.configuration.ingress.fqdn}'
 output keyVaultUri string = keyVaultUri
 output postgresHost string = '${postgresServerName}.postgres.database.azure.com'
+output searchServiceEndpoint string = 'https://${searchServiceName}.search.windows.net'
+output searchServiceName string = searchServiceName
+output openaiPrimaryEndpoint string = openaiPrimary.properties.endpoint
+output openaiSecondaryEndpoint string = openaiSecondary.properties.endpoint
+output embeddingDeploymentName string = embeddingDeploymentName

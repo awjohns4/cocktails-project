@@ -31,7 +31,7 @@ This specification is based only on decisions already provided.
 
 ### 2.2 Phase 2
 
-- Secondary Azure region name for embedding fallback (required before Phase 2 deploy)
+- None
 
 ## 3. Resource Group and Naming
 
@@ -211,8 +211,10 @@ Budget verification step:
 - Embedding provider: Azure OpenAI
 - Embedding model: text-embedding-3-small
 - Embedding region policy: West US primary, allow secondary Azure region fallback if unavailable
-- Secondary embedding region: TBD (must be explicitly selected before Phase 2 deployment)
-- Azure AI Search SKU (Dev): Basic
+- Secondary embedding region: East US
+- Azure AI Search pricing model (Dev): Serverless Developer (Preview)
+- Azure AI Search region (Dev): West Central US
+- Azure AI Search note: preview service used for cost-efficient, usage-based development workloads
 - Search index topology: single unified cocktails index
 - Index refresh strategy: manual reindex trigger only (aligned with manual scrape flow)
 - Evaluation dataset size: 50 prompts
@@ -234,6 +236,20 @@ Phase 2 index documents include:
 - History text
 
 Canonical instructions and structured recipe details must still be served from PostgreSQL.
+
+### 5.2.2 Index Schema Definition (Implemented)
+
+- Index schema file: `infra/search/cocktails-index.json`
+- Index name: `cocktails-index`
+- Key field: `id`
+- Vector field: `searchContentVector` (1536 dimensions for `text-embedding-3-small`)
+- Semantic config: `cocktails-semantic-config`
+- Provision/apply script: `scripts/create_search_index.sh`
+
+Operational notes:
+
+- Index objects are data-plane resources in Azure AI Search and are applied via Search REST API.
+- This schema is versioned in Git and is safe to re-apply (PUT upsert behavior).
 
 ## 5.3 Phase 2 MCP Additions
 
@@ -418,7 +434,7 @@ Job writes logs to App Insights and updates PostgreSQL.
 - [ ] Configure embedding model: text-embedding-3-small
 - [ ] Configure embedding region fallback policy (secondary Azure region)
 - [ ] Select and document specific secondary Azure region name for embeddings
-- [ ] Use Azure AI Search Basic SKU for Dev
+- [ ] Use Azure AI Search Serverless Developer (Preview) in West Central US for Dev
 - [ ] Implement single unified cocktails index
 - [ ] Build indexing pipeline
 - [ ] Implement manual reindex trigger flow
@@ -439,16 +455,22 @@ Job writes logs to App Insights and updates PostgreSQL.
 
 ## 11. Immediate Next Decisions Required
 
-To finalize this into an execution-ready build plan, provide:
-
-- Secondary Azure region name for Azure OpenAI embedding fallback in Phase 2.
+- None (Phase 2 secondary region confirmed as East US)
 
 ## 12. Budget Control Notes
 
-- Phase 1 budget target remains <= $50/month.
-- Phase 2 introduces Azure AI Search + Azure OpenAI and may exceed the same budget target depending on usage.
-- Before enabling Phase 2 in Azure, run a pricing estimate and record projected monthly spend.
-- Do not enable Phase 2 services if projected cost exceeds approved budget without explicit approval.
+- Phase 1 budget target: <= $50/month ✅ **Achieved (~$40-45/month)**
+- Phase 2 introduces Azure AI Search + Azure OpenAI with usage-based billing assumptions
+- **Phase 2 Cost Estimate** (documented in [PHASE2_COST_ESTIMATE.md](PHASE2_COST_ESTIMATE.md)):
+  - Azure AI Search (Serverless Developer Preview, West Central US): no billed compute/storage during current preview period (estimated usage visible in telemetry)
+  - Azure OpenAI (text-embedding-3-small): $0.01/month (negligible)
+  - **Phase 2 Total (current preview billing period)**: approximately $0.01/month billed
+- **Combined Phase 1 + Phase 2 Total (current preview billing period)**: approximately $40-45/month
+- **Phase 2 Authorization**: ✅ **Approved to proceed with Phase 2 as planned**
+  - Rationale: Phase 2 provides meaningful semantic search capabilities with a usage-based development path
+  - Monitoring: Track actual costs post-deployment against estimate
+  - Risk note: Serverless Developer is preview-only, has limited regions, and billing terms can change with notice
+  - Phase 3 (Service Bus): Expected minimal additional cost (~$1-5/month)
 
 ## 13. Phase 1 Gaps (Post-Deployment Review)
 

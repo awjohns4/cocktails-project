@@ -46,6 +46,7 @@ az deployment group create \
 echo "Phase 2: Building container images in ACR..."
 az acr build -r "$ACR_NAME" -t cocktail-mcp-api:latest -f Dockerfile.api . --no-logs
 az acr build -r "$ACR_NAME" -t cocktail-scraper:latest -f Dockerfile.scraper . --no-logs
+az acr build -r "$ACR_NAME" -t cocktail-indexer:latest -f Dockerfile.indexer . --no-logs
 
 # Phase 3: Re-run Bicep — idempotent, container apps will now succeed with images available.
 echo "Phase 3: Re-deploying to provision container apps with images..."

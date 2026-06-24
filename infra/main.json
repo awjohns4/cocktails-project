@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.44.1.10279",
-      "templateHash": "5176298071009067115"
+      "templateHash": "4697262125880644308"
     }
   },
   "parameters": {
@@ -46,9 +46,16 @@
     },
     "scraperJobName": {
       "type": "string",
-      "defaultValue": "caj-cocktailagent-scraper-dev-wus-01",
+      "defaultValue": "caj-cocktail-scraper-dev-wus-01",
       "metadata": {
         "description": "Scraper job container app name"
+      }
+    },
+    "indexerJobName": {
+      "type": "string",
+      "defaultValue": "caj-cocktail-indexer-dev-wus-01",
+      "metadata": {
+        "description": "Indexer job container app name"
       }
     },
     "postgresServerName": {
@@ -112,10 +119,94 @@
         "description": "Scraper job image in ACR"
       }
     },
+    "indexerImage": {
+      "type": "string",
+      "defaultValue": "acrcocktailagentdevwus01.azurecr.io/cocktail-indexer:latest",
+      "metadata": {
+        "description": "Indexer job image in ACR"
+      }
+    },
     "mcpApiKey": {
       "type": "securestring",
       "metadata": {
         "description": "MCP API key used for private access"
+      }
+    },
+    "searchServiceName": {
+      "type": "string",
+      "defaultValue": "srch-cocktailagent-dev-wcu-01",
+      "metadata": {
+        "description": "Azure AI Search service name"
+      }
+    },
+    "searchSku": {
+      "type": "string",
+      "defaultValue": "serverless",
+      "metadata": {
+        "description": "Azure AI Search SKU"
+      }
+    },
+    "searchLocation": {
+      "type": "string",
+      "defaultValue": "westcentralus",
+      "metadata": {
+        "description": "Azure AI Search location (defaults to West Central US for serverless preview)"
+      }
+    },
+    "searchPublicNetworkAccess": {
+      "type": "string",
+      "defaultValue": "Enabled",
+      "metadata": {
+        "description": "Azure AI Search public network access"
+      }
+    },
+    "searchReplicaCount": {
+      "type": "int",
+      "defaultValue": 1,
+      "metadata": {
+        "description": "Azure AI Search replica count (ignored for serverless)"
+      }
+    },
+    "searchPartitionCount": {
+      "type": "int",
+      "defaultValue": 1,
+      "metadata": {
+        "description": "Azure AI Search partition count (ignored for serverless)"
+      }
+    },
+    "openaiPrimaryName": {
+      "type": "string",
+      "defaultValue": "oai-cocktailagent-dev-wus-01",
+      "metadata": {
+        "description": "Azure OpenAI resource name (primary, West US)"
+      }
+    },
+    "openaiSecondaryName": {
+      "type": "string",
+      "defaultValue": "oai-cocktailagent-dev-eus-01",
+      "metadata": {
+        "description": "Azure OpenAI resource name (secondary, East US)"
+      }
+    },
+    "embeddingDeploymentName": {
+      "type": "string",
+      "defaultValue": "text-embedding-3-small",
+      "metadata": {
+        "description": "Azure OpenAI embedding deployment name"
+      }
+    },
+    "embeddingModelVersion": {
+      "type": "string",
+      "defaultValue": "1",
+      "metadata": {
+        "description": "Azure OpenAI embedding model version"
+      }
+    },
+    "openaiSku": {
+      "type": "string",
+      "defaultValue": "S0",
+      "metadata": {
+        "description": "Azure OpenAI SKU"
       }
     }
   },
@@ -125,7 +216,8 @@
     },
     "dbConnectionString": "[format('postgresql://{0}:{1}@{2}.postgres.database.azure.com:5432/{3}?sslmode=require', parameters('postgresAdminUsername'), parameters('postgresAdminPassword'), parameters('postgresServerName'), parameters('postgresDbName'))]",
     "acrPullRoleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')]",
-    "keyVaultUri": "[format('https://{0}.{1}', parameters('keyVaultName'), environment().suffixes.keyvaultDns)]"
+    "keyVaultUri": "[format('https://{0}.{1}', parameters('keyVaultName'), environment().suffixes.keyvaultDns)]",
+    "userAssignedMiName": "mi-cocktail-apps-dev-wus-01"
   },
   "resources": [
     {
@@ -281,13 +373,23 @@
       ]
     },
     {
+      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+      "apiVersion": "2023-01-31",
+      "name": "[variables('userAssignedMiName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('tags')]"
+    },
+    {
       "type": "Microsoft.App/containerApps",
       "apiVersion": "2023-05-01",
       "name": "[parameters('mcpContainerAppName')]",
       "location": "[parameters('location')]",
       "tags": "[variables('tags')]",
       "identity": {
-        "type": "SystemAssigned"
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedMiName')))]": {}
+        }
       },
       "properties": {
         "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', parameters('containerAppsEnvName'))]",
@@ -299,7 +401,7 @@
           "registries": [
             {
               "server": "[format('{0}.azurecr.io', parameters('acrName'))]",
-              "identity": "system"
+              "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedMiName'))]"
             }
           ],
           "secrets": [
@@ -350,7 +452,8 @@
       },
       "dependsOn": [
         "[resourceId('Microsoft.Insights/components', parameters('appInsightsName'))]",
-        "[resourceId('Microsoft.App/managedEnvironments', parameters('containerAppsEnvName'))]"
+        "[resourceId('Microsoft.App/managedEnvironments', parameters('containerAppsEnvName'))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedMiName'))]"
       ]
     },
     {
@@ -360,7 +463,10 @@
       "location": "[parameters('location')]",
       "tags": "[variables('tags')]",
       "identity": {
-        "type": "SystemAssigned"
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedMiName')))]": {}
+        }
       },
       "properties": {
         "environmentId": "[resourceId('Microsoft.App/managedEnvironments', parameters('containerAppsEnvName'))]",
@@ -375,7 +481,7 @@
           "registries": [
             {
               "server": "[format('{0}.azurecr.io', parameters('acrName'))]",
-              "identity": "system"
+              "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedMiName'))]"
             }
           ],
           "secrets": [
@@ -410,6 +516,10 @@
                 {
                   "name": "APPLICATIONINSIGHTS_CONNECTION_STRING",
                   "value": "[reference(resourceId('Microsoft.Insights/components', parameters('appInsightsName')), '2020-02-02').ConnectionString]"
+                },
+                {
+                  "name": "KEY_VAULT_URI",
+                  "value": "[variables('keyVaultUri')]"
                 }
               ]
             }
@@ -418,37 +528,227 @@
       },
       "dependsOn": [
         "[resourceId('Microsoft.Insights/components', parameters('appInsightsName'))]",
-        "[resourceId('Microsoft.App/managedEnvironments', parameters('containerAppsEnvName'))]"
+        "[resourceId('Microsoft.App/managedEnvironments', parameters('containerAppsEnvName'))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedMiName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.App/jobs",
+      "apiVersion": "2023-05-01",
+      "name": "[parameters('indexerJobName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('tags')]",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedMiName')))]": {}
+        }
+      },
+      "properties": {
+        "environmentId": "[resourceId('Microsoft.App/managedEnvironments', parameters('containerAppsEnvName'))]",
+        "configuration": {
+          "triggerType": "Manual",
+          "replicaTimeout": 3600,
+          "replicaRetryLimit": 1,
+          "manualTriggerConfig": {
+            "parallelism": 1,
+            "replicaCompletionCount": 1
+          },
+          "registries": [
+            {
+              "server": "[format('{0}.azurecr.io', parameters('acrName'))]",
+              "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedMiName'))]"
+            }
+          ],
+          "secrets": [
+            {
+              "name": "db-connection-string",
+              "value": "[variables('dbConnectionString')]"
+            },
+            {
+              "name": "search-admin-key",
+              "value": "[listAdminKeys(resourceId('Microsoft.Search/searchServices', parameters('searchServiceName')), '2025-05-01').primaryKey]"
+            }
+          ]
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "indexer",
+              "image": "[parameters('indexerImage')]",
+              "resources": {
+                "cpu": "[json('1.0')]",
+                "memory": "2.0Gi"
+              },
+              "env": [
+                {
+                  "name": "DATABASE_URL",
+                  "secretRef": "db-connection-string"
+                },
+                {
+                  "name": "SEARCH_SERVICE_NAME",
+                  "value": "[parameters('searchServiceName')]"
+                },
+                {
+                  "name": "SEARCH_ADMIN_KEY",
+                  "secretRef": "search-admin-key"
+                },
+                {
+                  "name": "SEARCH_INDEX_NAME",
+                  "value": "cocktails-index"
+                },
+                {
+                  "name": "APPLICATIONINSIGHTS_CONNECTION_STRING",
+                  "value": "[reference(resourceId('Microsoft.Insights/components', parameters('appInsightsName')), '2020-02-02').ConnectionString]"
+                },
+                {
+                  "name": "KEY_VAULT_URI",
+                  "value": "[variables('keyVaultUri')]"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/components', parameters('appInsightsName'))]",
+        "[resourceId('Microsoft.App/managedEnvironments', parameters('containerAppsEnvName'))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedMiName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.CognitiveServices/accounts",
+      "apiVersion": "2023-10-01-preview",
+      "name": "[parameters('openaiPrimaryName')]",
+      "location": "westus",
+      "tags": "[variables('tags')]",
+      "kind": "OpenAI",
+      "sku": {
+        "name": "[parameters('openaiSku')]"
+      },
+      "properties": {
+        "publicNetworkAccess": "Enabled",
+        "apiProperties": {
+          "statisticsEnabled": false
+        }
+      }
+    },
+    {
+      "type": "Microsoft.CognitiveServices/accounts/deployments",
+      "apiVersion": "2023-10-01-preview",
+      "name": "[format('{0}/{1}', parameters('openaiPrimaryName'), parameters('embeddingDeploymentName'))]",
+      "sku": {
+        "name": "Standard",
+        "capacity": 1
+      },
+      "properties": {
+        "model": {
+          "format": "OpenAI",
+          "name": "text-embedding-3-small",
+          "version": "[parameters('embeddingModelVersion')]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts', parameters('openaiPrimaryName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.CognitiveServices/accounts",
+      "apiVersion": "2023-10-01-preview",
+      "name": "[parameters('openaiSecondaryName')]",
+      "location": "eastus",
+      "tags": "[variables('tags')]",
+      "kind": "OpenAI",
+      "sku": {
+        "name": "[parameters('openaiSku')]"
+      },
+      "properties": {
+        "publicNetworkAccess": "Enabled",
+        "apiProperties": {
+          "statisticsEnabled": false
+        }
+      }
+    },
+    {
+      "type": "Microsoft.CognitiveServices/accounts/deployments",
+      "apiVersion": "2023-10-01-preview",
+      "name": "[format('{0}/{1}', parameters('openaiSecondaryName'), parameters('embeddingDeploymentName'))]",
+      "sku": {
+        "name": "Standard",
+        "capacity": 1
+      },
+      "properties": {
+        "model": {
+          "format": "OpenAI",
+          "name": "text-embedding-3-small",
+          "version": "[parameters('embeddingModelVersion')]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts', parameters('openaiSecondaryName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2023-02-01",
+      "name": "[format('{0}/{1}', parameters('keyVaultName'), 'openai-primary-endpoint')]",
+      "properties": {
+        "value": "[reference(resourceId('Microsoft.CognitiveServices/accounts', parameters('openaiPrimaryName')), '2023-10-01-preview').endpoint]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]",
+        "[resourceId('Microsoft.CognitiveServices/accounts', parameters('openaiPrimaryName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2023-02-01",
+      "name": "[format('{0}/{1}', parameters('keyVaultName'), 'openai-primary-key')]",
+      "properties": {
+        "value": "[listKeys(resourceId('Microsoft.CognitiveServices/accounts', parameters('openaiPrimaryName')), '2023-10-01-preview').key1]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]",
+        "[resourceId('Microsoft.CognitiveServices/accounts', parameters('openaiPrimaryName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2023-02-01",
+      "name": "[format('{0}/{1}', parameters('keyVaultName'), 'openai-secondary-endpoint')]",
+      "properties": {
+        "value": "[reference(resourceId('Microsoft.CognitiveServices/accounts', parameters('openaiSecondaryName')), '2023-10-01-preview').endpoint]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]",
+        "[resourceId('Microsoft.CognitiveServices/accounts', parameters('openaiSecondaryName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2023-02-01",
+      "name": "[format('{0}/{1}', parameters('keyVaultName'), 'openai-secondary-key')]",
+      "properties": {
+        "value": "[listKeys(resourceId('Microsoft.CognitiveServices/accounts', parameters('openaiSecondaryName')), '2023-10-01-preview').key1]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]",
+        "[resourceId('Microsoft.CognitiveServices/accounts', parameters('openaiSecondaryName'))]"
       ]
     },
     {
       "type": "Microsoft.Authorization/roleAssignments",
       "apiVersion": "2022-04-01",
       "scope": "[resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName'))]",
-      "name": "[guid(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), parameters('mcpContainerAppName'), 'AcrPull-mcp')]",
+      "name": "[guid(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedMiName')), 'AcrPull')]",
       "properties": {
         "roleDefinitionId": "[variables('acrPullRoleDefinitionId')]",
-        "principalId": "[reference(resourceId('Microsoft.App/containerApps', parameters('mcpContainerAppName')), '2023-05-01', 'full').identity.principalId]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedMiName')), '2023-01-31').principalId]",
         "principalType": "ServicePrincipal"
       },
       "dependsOn": [
         "[resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName'))]",
-        "[resourceId('Microsoft.App/containerApps', parameters('mcpContainerAppName'))]"
-      ]
-    },
-    {
-      "type": "Microsoft.Authorization/roleAssignments",
-      "apiVersion": "2022-04-01",
-      "scope": "[resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName'))]",
-      "name": "[guid(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), parameters('scraperJobName'), 'AcrPull-scraper')]",
-      "properties": {
-        "roleDefinitionId": "[variables('acrPullRoleDefinitionId')]",
-        "principalId": "[reference(resourceId('Microsoft.App/jobs', parameters('scraperJobName')), '2023-05-01', 'full').identity.principalId]",
-        "principalType": "ServicePrincipal"
-      },
-      "dependsOn": [
-        "[resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName'))]",
-        "[resourceId('Microsoft.App/jobs', parameters('scraperJobName'))]"
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedMiName'))]"
       ]
     }
   ],
@@ -464,6 +764,26 @@
     "postgresHost": {
       "type": "string",
       "value": "[format('{0}.postgres.database.azure.com', parameters('postgresServerName'))]"
+    },
+    "searchServiceEndpoint": {
+      "type": "string",
+      "value": "[format('https://{0}.search.windows.net', parameters('searchServiceName'))]"
+    },
+    "searchServiceName": {
+      "type": "string",
+      "value": "[parameters('searchServiceName')]"
+    },
+    "openaiPrimaryEndpoint": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.CognitiveServices/accounts', parameters('openaiPrimaryName')), '2023-10-01-preview').endpoint]"
+    },
+    "openaiSecondaryEndpoint": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.CognitiveServices/accounts', parameters('openaiSecondaryName')), '2023-10-01-preview').endpoint]"
+    },
+    "embeddingDeploymentName": {
+      "type": "string",
+      "value": "[parameters('embeddingDeploymentName')]"
     }
   }
 }

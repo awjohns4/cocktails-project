@@ -5,6 +5,7 @@ RESOURCE_GROUP="rg-cocktailagent-dev-wus-01"
 ACR_NAME="acrcocktailagentdevwus01"
 CONTAINER_APP="ca-cocktailagent-mcp-dev-wus-01"
 CONTAINER_JOB="caj-cocktail-scraper-dev-wus-01"
+INDEXER_JOB="caj-cocktail-indexer-dev-wus-01"
 TARGET="api"
 IMAGE_REPO=""
 DOCKERFILE=""
@@ -30,9 +31,11 @@ Usage:
 Options:
   --resource-group <name>    Azure resource group.
   --acr-name <name>          Azure Container Registry name (no .azurecr.io).
-  --target <api|scraper>     Deploy API container app or scraper container app job.
+  --target <api|scraper|indexer>
+                              Deploy API container app or a container app job.
   --container-app <name>     Azure Container App name.
   --container-job <name>     Azure Container Apps Job name.
+  --indexer-job <name>       Azure Container Apps indexer job name.
   --image-repo <name>        Image repository in ACR.
   --tag <tag>                Image tag to build and deploy. Defaults to current date/time.
   --dockerfile <path>        Dockerfile path.
@@ -44,6 +47,7 @@ Options:
 Examples:
   scripts/deploy_containerapp_revision.sh
   scripts/deploy_containerapp_revision.sh --target scraper
+  scripts/deploy_containerapp_revision.sh --target indexer
   scripts/deploy_containerapp_revision.sh --tag v1.4.0
   scripts/deploy_containerapp_revision.sh --target api --container-app my-app --image-repo my-api
 EOF
@@ -69,6 +73,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --container-job)
       CONTAINER_JOB="$2"
+      shift 2
+      ;;
+    --indexer-job)
+      INDEXER_JOB="$2"
       shift 2
       ;;
     --image-repo)
@@ -127,8 +135,16 @@ case "$TARGET" in
       DOCKERFILE="Dockerfile.scraper"
     fi
     ;;
+  indexer)
+    if [[ "$IMAGE_REPO_SET" == false ]]; then
+      IMAGE_REPO="cocktail-indexer"
+    fi
+    if [[ "$DOCKERFILE_SET" == false ]]; then
+      DOCKERFILE="Dockerfile.indexer"
+    fi
+    ;;
   *)
-    echo "Invalid --target value: ${TARGET}. Use 'api' or 'scraper'."
+    echo "Invalid --target value: ${TARGET}. Use 'api', 'scraper', or 'indexer'."
     exit 1
     ;;
 esac
@@ -148,8 +164,10 @@ echo "Target         : ${TARGET}"
 echo "Resource group : ${RESOURCE_GROUP}"
 if [[ "$TARGET" == "api" ]]; then
   echo "Container App  : ${CONTAINER_APP}"
-else
+elif [[ "$TARGET" == "scraper" ]]; then
   echo "Container Job  : ${CONTAINER_JOB}"
+else
+  echo "Indexer Job    : ${INDEXER_JOB}"
 fi
 echo "ACR            : ${ACR_NAME}"
 echo "Image          : ${IMAGE}"
@@ -172,8 +190,10 @@ if [[ "$DRY_RUN" == false ]]; then
   az acr show --name "$ACR_NAME" >/dev/null
   if [[ "$TARGET" == "api" ]]; then
     az containerapp show --resource-group "$RESOURCE_GROUP" --name "$CONTAINER_APP" >/dev/null
-  else
+  elif [[ "$TARGET" == "scraper" ]]; then
     az containerapp job show --resource-group "$RESOURCE_GROUP" --name "$CONTAINER_JOB" >/dev/null
+  else
+    az containerapp job show --resource-group "$RESOURCE_GROUP" --name "$INDEXER_JOB" >/dev/null
   fi
 fi
 
@@ -202,9 +222,14 @@ if [[ "$TARGET" == "api" ]]; then
   fi
 else
   echo "Updating Container Apps Job to new image..."
+  JOB_NAME="$CONTAINER_JOB"
+  if [[ "$TARGET" == "indexer" ]]; then
+    JOB_NAME="$INDEXER_JOB"
+  fi
+
   run_cmd az containerapp job update \
     --resource-group "$RESOURCE_GROUP" \
-    --name "$CONTAINER_JOB" \
+    --name "$JOB_NAME" \
     --image "$IMAGE" \
     --query "{name:name,provisioningState:properties.provisioningState}" \
     --output json
